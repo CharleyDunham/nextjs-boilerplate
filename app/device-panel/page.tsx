@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Pusher from "pusher-js";
 
 export default function DevicePanel() {
   const [consoleLog, setConsoleLog] = useState<string[]>([]);
@@ -10,46 +11,56 @@ export default function DevicePanel() {
   const [angleStep, setAngleStep] = useState(10);
   const [timeDelay, setTimeDelay] = useState(500);
   const [maxRange, setMaxRange] = useState(180);
-  const [ws, setWs] = useState<WebSocket | null>(null);
 
   useEffect(() => {
-    const socket = new WebSocket(`ws://${window.location.hostname}:81`);
+    // Enable Pusher logging in development mode
+    if (process.env.NODE_ENV === "development") {
+      Pusher.logToConsole = true;
+    }
 
-    socket.onopen = () => {
-      console.log("WebSocket connected");
-      setConsoleLog((prev) => ["🟢 Connected to WebSocket", ...prev]);
-    };
+    // Initialize Pusher client
+    const pusher = new Pusher(process.env.NEXT_PUBLIC_PUSHER_KEY || "", {
+      cluster: process.env.NEXT_PUBLIC_PUSHER_CLUSTER || "",
+    });
 
-    socket.onmessage = (event) => {
-      console.log("📥 Received:", event.data);
-      setConsoleLog((prev) => [`📥 ${event.data}`, ...prev]);
-    };
+    const channel = pusher.subscribe("exo-channel");
 
-    socket.onclose = () => {
-      console.log("WebSocket disconnected");
-      setConsoleLog((prev) => ["🔴 WebSocket Disconnected", ...prev]);
-    };
-
-    setWs(socket);
+    channel.bind("servo-update", (data: any) => {
+      console.log("📥 Received event:", data);
+      setConsoleLog((prevLog) => [`📥 ${JSON.stringify(data)}`, ...prevLog]);
+    });
 
     return () => {
-      socket.close();
+      channel.unbind_all();
+      channel.unsubscribe();
+      pusher.disconnect();
     };
   }, []);
 
-  function sendCommand(command: string, value: any) {
-    if (ws) {
-      const msg = JSON.stringify({ command, value });
-      ws.send(msg);
-      setConsoleLog((prev) => [`➡️ Sent: ${msg}`, ...prev]);
-    } else {
-      console.error("❌ WebSocket not connected");
+  async function sendCommand(command: string, value: any) {
+    try {
+      const response = await fetch("/api/pusher", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          channel: "exo-channel",
+          event: command,
+          data: value,
+        }),
+      });
+
+      if (!response.ok) throw new Error("Failed to send event");
+
+      console.log(`✅ Sent command: ${command} = ${value}`);
+      setConsoleLog((prev) => [`➡️ Sent: ${command} = ${JSON.stringify(value)}`, ...prev]);
+    } catch (error) {
+      console.error("❌ API request failed:", error);
     }
   }
 
   return (
     <div className="container mx-auto p-8">
-      <h1 className="text-2xl font-bold">Device Panel</h1>
+      <h1 className="text-2xl font-bold">Device Panel (No WebSockets)</h1>
 
       {/* Console Log */}
       <div className="mt-4 p-4 border border-gray-300 rounded-md bg-gray-100 h-40 overflow-y-auto text-black">
@@ -59,7 +70,7 @@ export default function DevicePanel() {
         ))}
       </div>
 
-      {/* Servo Settings */}
+      {/* Servo Controls */}
       <div className="mt-6">
         <h2 className="text-lg font-semibold">Servo Controls</h2>
         <div className="flex flex-col gap-4">
